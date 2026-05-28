@@ -18,7 +18,7 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ unique: true })
+  @Column({ type: 'citext', unique: true })
   email!: string;
 
   @Column()

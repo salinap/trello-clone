@@ -4,7 +4,7 @@ import { CreateUserDto } from '../users/dto/create-user.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/user.entity';
-import { LoginDto } from 'src/users/dto/login.dto';
+import { LoginDto } from '../users/dto/login.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -18,6 +18,26 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('refresh')
+  refresh(@Body('refreshToken') refreshToken: string) {
+    return this.authService.refresh(refreshToken);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  logout(@CurrentUser() user: User) {
+    return this.authService.logout(user.id);
+  }
+
+  @Post('revoke')
+  @UseGuards(JwtAuthGuard)
+  revoke(
+    @CurrentUser() user: User,
+    @Body('refreshToken') refreshToken: string,
+  ) {
+    return this.authService.revoke(user.id, refreshToken);
   }
 
   @Get('verify-email')

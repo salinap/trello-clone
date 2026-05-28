@@ -1,5 +1,6 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
@@ -19,9 +20,15 @@ export class UsersService {
     private readonly config: ConfigService,
   ) {}
 
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
+
   async create(dto: CreateUserDto): Promise<User> {
+    const normalizedEmail = this.normalizeEmail(dto.email);
+
     const exists = await this.usersRepo.findOne({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
     });
     if (exists) throw new ConflictException('Email уже зарегистрирован');
 
@@ -35,6 +42,7 @@ export class UsersService {
 
     const user = this.usersRepo.create({
       ...dto,
+      email: normalizedEmail,
       password: hashed,
       emailVerificationToken: verificationToken,
       emailVerificationExpires: expires,
@@ -44,14 +52,31 @@ export class UsersService {
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    return this.usersRepo.findOne({ where: { email } });
+    const normalizedEmail = this.normalizeEmail(email);
+    return this.usersRepo.findOne({ where: { email: normalizedEmail } });
   }
 
   async findById(id: string): Promise<User | null> {
     return this.usersRepo.findOne({ where: { id } });
   }
 
+  async setCurrentRefreshToken(
+    userId: string,
+    refreshToken: string,
+  ): Promise<void> {
+    const hashed = await bcrypt.hash(refreshToken, 12);
+    await this.usersRepo.update({ id: userId }, { hashedRefreshToken: hashed });
+  }
+
+  async clearRefreshToken(userId: string): Promise<void> {
+    await this.usersRepo.update({ id: userId }, { hashedRefreshToken: null });
+  }
+
   async verifyEmail(token: string): Promise<User> {
+    if (!token) {
+      throw new BadRequestException('Токен не передан');
+    }
+
     const user = await this.usersRepo.findOne({
       where: { emailVerificationToken: token },
     });

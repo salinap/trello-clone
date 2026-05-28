@@ -2,13 +2,22 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
-import { LoginDto } from 'src/users/dto/login.dto';
+import { LoginDto } from '../users/dto/login.dto';
+
+type JwtExpiresIn = import('@nestjs/jwt').JwtSignOptions['expiresIn'];
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+}
 
 @Injectable()
 export class AuthService {
@@ -16,7 +25,34 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
+    private readonly config: ConfigService,
   ) {}
+
+  private async issueTokens(
+    userId: string,
+    email: string,
+    role: string,
+  ): Promise<AuthTokens> {
+    const accessToken = await this.jwtService.signAsync(
+      { sub: userId, email, role },
+      {
+        secret: this.config.getOrThrow<string>('jwt.accessSecret'),
+        expiresIn: this.config.getOrThrow<JwtExpiresIn>('jwt.accessExpiresIn'),
+      },
+    );
+
+    const refreshToken = await this.jwtService.signAsync(
+      { sub: userId, email, role },
+      {
+        secret: this.config.getOrThrow<string>('jwt.refreshSecret'),
+        expiresIn: this.config.getOrThrow<JwtExpiresIn>('jwt.refreshExpiresIn'),
+      },
+    );
+
+    await this.usersService.setCurrentRefreshToken(userId, refreshToken);
+
+    return { accessToken, refreshToken };
+  }
 
   async register(dto: CreateUserDto) {
     const user = await this.usersService.create(dto);
@@ -47,11 +83,10 @@ export class AuthService {
       throw new BadRequestException('Сначала подтвердите email');
     }
 
-    const payload = { sub: user.id, email: user.email, role: user.role };
-    const token = this.jwtService.sign(payload);
+    const tokens = await this.issueTokens(user.id, user.email, user.role);
 
     return {
-      accessToken: token,
+      ...tokens,
       user: {
         id: user.id,
         email: user.email,
@@ -60,6 +95,69 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  async refresh(refreshToken: string): Promise<AuthTokens> {
+    let payload: { sub: string };
+
+    try {
+      payload = await this.jwtService.verifyAsync<{ sub: string }>(
+        refreshToken,
+        {
+          secret: this.config.getOrThrow<string>('jwt.refreshSecret'),
+        },
+      );
+    } catch {
+      throw new UnauthorizedException('Невалидный refresh token');
+    }
+
+    const user = await this.usersService.findById(payload.sub);
+    if (!user || !user.hashedRefreshToken) {
+      throw new UnauthorizedException('Сессия не найдена');
+    }
+
+    const isValid = await bcrypt.compare(refreshToken, user.hashedRefreshToken);
+    if (!isValid) {
+      throw new UnauthorizedException('Refresh token отозван');
+    }
+
+    if (!user.isEmailVerified) {
+      throw new BadRequestException('Сначала подтвердите email');
+    }
+
+    return this.issueTokens(user.id, user.email, user.role);
+  }
+
+  async logout(userId: string) {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new NotFoundException('Пользователь не найден');
+    }
+
+    await this.usersService.clearRefreshToken(userId);
+    return { message: 'Выход выполнен. Сессия отозвана.' };
+  }
+
+  async revoke(currentUserId: string, refreshToken: string) {
+    let payload: { sub: string };
+
+    try {
+      payload = await this.jwtService.verifyAsync<{ sub: string }>(
+        refreshToken,
+        {
+          secret: this.config.getOrThrow<string>('jwt.refreshSecret'),
+        },
+      );
+    } catch {
+      throw new UnauthorizedException('Невалидный refresh token');
+    }
+
+    if (payload.sub !== currentUserId) {
+      throw new UnauthorizedException('Нельзя отзывать чужую сессию');
+    }
+
+    await this.usersService.clearRefreshToken(payload.sub);
+    return { message: 'Refresh token отозван.' };
   }
 
   async verifyEmail(token: string) {
