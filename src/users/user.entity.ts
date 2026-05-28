@@ -30,6 +30,9 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   lastName!: string | null;
 
+  @Column({ type: 'varchar', nullable: true })
+  avatarUrl!: string | null;
+
   @Column({
     type: 'enum',
     enum: UserRole,
