@@ -3,7 +3,7 @@ import { DataSource } from 'typeorm';
 import { User } from '../users/user.entity';
 
 config({
-  path: `.env.${process.env.NODE_ENV ?? 'development'}`,
+  path: `.env`,
 });
 
 export default new DataSource({
